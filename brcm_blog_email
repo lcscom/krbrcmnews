@@ -1,0 +1,123 @@
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
+from googletrans import Translator
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+import os
+
+# 블로그 URL 리스트
+urls = [
+    "https://blogs.vmware.com/vexpert/",
+    "https://blogs.vmware.com/explore/",
+    "https://blogs.vmware.com/multi-cloud/",
+    "https://blogs.vmware.com/cloud-foundation/",
+    "https://blogs.vmware.com/management/",
+    "https://blogs.vmware.com/load-balancing/",
+    "https://blogs.vmware.com/performance/",
+    "https://blogs.vmware.com/vsphere/",
+    "https://blogs.vmware.com/security/",
+    "https://blogs.vmware.com/sase/",
+    "https://blogs.vmware.com/tanzu/",
+    "https://blogs.vmware.com/code/",
+    "https://blogs.vmware.com/cloudprovider/",
+    "https://blogs.vmware.com/telco/",
+    "https://blogs.vmware.com/hol/",
+    "https://blogs.vmware.com/learning/",
+    "https://blogs.vmware.com/professional-services/",
+]
+
+seven_days_ago = datetime.now() - timedelta(days=7)
+translator = Translator()
+
+def fetch_blog_data(url):
+    return BeautifulSoup(requests.get(url).content, 'html.parser')
+
+def extract_post_details(soup, url):
+    posts = []
+    for post in soup.find_all('article'):
+        title_tag = post.find('h2')
+        if title_tag:
+            title = title_tag.text.strip()
+            link = title_tag.find('a')['href']
+            date_str = post.find('time')['datetime'] if post.find('time') else None
+            if date_str and datetime.fromisoformat(date_str) >= seven_days_ago:
+                posts.append((datetime.fromisoformat(date_str), title, link, url))
+    return posts
+
+def generate_custom_html(posts):
+    output_html = '<div style="border:1px dotted; padding:10px;"><b>최신 블로그 포스트:</b><br>'
+    posts.sort(key=lambda x: x[0], reverse=True)  # 최신 포스트가 위로 오도록 정렬
+    current_source = None
+
+    for post_date, title, link, source in posts:
+        if source != current_source:
+            current_source = source
+            output_html += f'<br><b>[{source.split("/")[-2]}]</b><br>'
+        
+        # 제목 번역
+        translated_title = translator.translate(title, dest='ko').text
+        date_display = f'{post_date.strftime("%Y-%m-%d")}({post_date.strftime("%a")})'
+        output_html += f'{date_display} | <a href="{link}" target="_blank">{translated_title}</a><br>'
+    
+    return output_html + '</div>'
+
+def save_html_to_file(html_content, filename='blog_posts.html'):
+    with open(filename, 'w', encoding='utf-8') as file:
+        file.write(html_content)
+
+def send_email_with_attachment(to_email, subject, body, attachment_file):
+    smtp_server = 'smtp.gmail.com'
+    smtp_port = 587
+    from_email = ''  # 자신의 Gmail 주소
+    password = ''  # 자신의 Gmail 비밀번호 또는 앱 비밀번호
+
+    msg = MIMEMultipart()
+    msg['From'] = from_email
+    msg['To'] = to_email
+    msg['Subject'] = subject
+
+    msg.attach(MIMEText(body, 'plain'))
+
+    if attachment_file:
+        with open(attachment_file, 'rb') as file:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(file.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename={os.path.basename(attachment_file)}')
+            msg.attach(part)
+
+    try:
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(from_email, password)
+        server.send_message(msg)
+        print("이메일이 성공적으로 전송되었습니다.")
+    except Exception as e:
+        print(f"이메일 전송 중 오류 발생: {e}")
+    finally:
+        server.quit()
+
+if __name__ == "__main__":
+    all_recent_posts = []
+    for url in urls:
+        soup = fetch_blog_data(url)
+        all_recent_posts.extend(extract_post_details(soup, url))
+
+    # HTML 콘텐츠 생성
+    html_content = generate_custom_html(all_recent_posts)
+
+    # HTML 파일로 저장
+    save_html_to_file(html_content)
+
+    # 오늘 날짜 가져오기
+    today_date = datetime.now().strftime('%Y-%m-%d')
+
+    # 이메일 보내기
+    recipient_email = ''  # 수신자 이메일 주소
+    email_subject = f'최신 블로그 포스트 - {today_date}'  # 제목에 오늘 날짜 추가
+    email_body = '첨부된 파일에서 최신 블로그 포스트를 확인하세요.'
+    send_email_with_attachment(recipient_email, email_subject, email_body, 'blog_posts.html')
